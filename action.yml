@@ -1,0 +1,477 @@
+name: "Huawei FunctionGraph Deploy Action"
+description: "Action to deploy a function in Huawei Cloud's FunctionGraph using mandatory parameters."
+
+inputs:
+  access_key_id:
+    description: "Huawei Cloud Access Key ID"
+    required: true
+  secret_access_key:
+    description: "Huawei Cloud Secret Access Key"
+    required: true
+  region:
+    description: "Region where the function will be deployed (e.g., la-south-2)"
+    required: true
+  func_name:
+    description: "Name of the function to create"
+    required: true
+  package:
+    description: "Function package (default: 'default')"
+    required: false
+    default: "default"
+  runtime:
+    description: "Function runtime (e.g., Python3.10)"
+    required: true
+  timeout:
+    description: "Maximum execution time (in seconds, range: 3-259200)"
+    required: true
+  handler:
+    description: "Function handler (e.g., main.handler)"
+    required: true
+  memory_size:
+    description: "Memory allocated to the function in MB (e.g., 256)"
+    required: true
+  code_path:
+    description: "Path to the folder containing the function code (relative to the repository)"
+    required: false
+    default: ""
+  code_type:
+    description: "Function code type. Options: inline, zip, obs, jar, Custom-Image-Swr"
+    required: false
+    default: "zip"
+  code_filename:
+    description: "Code file name (required if code_type is zip)"
+    required: false
+    default: ""
+  code_link:
+    description: "URL for the function code"
+    required: false
+    default: ""
+
+  # VPC
+  func_vpc_domain_id:
+    description: "Domain name ID for the VPC"
+    required: false
+    default: ""
+  func_vpc_namespace:
+    description: "Project ID for the VPC"
+    required: false
+    default: ""
+  func_vpc_vpc_name:
+    description: "VPC name"
+    required: false
+    default: ""
+  func_vpc_vpc_id:
+    description: "VPC ID (required if VPC is configured)"
+    required: false
+    default: ""
+  func_vpc_subnet_name:
+    description: "Subnet name"
+    required: false
+    default: ""
+  func_vpc_subnet_id:
+    description: "Subnet ID (required if VPC is configured)"
+    required: false
+    default: ""
+  func_vpc_cidr:
+    description: "Subnet mask (CIDR)"
+    required: false
+    default: ""
+  func_vpc_gateway:
+    description: "Gateway"
+    required: false
+    default: ""
+  func_vpc_security_groups:
+    description: "Security groups (comma-separated values)"
+    required: false
+    default: ""
+
+  # Custom Image (SWR)
+  dockerfile_path:
+    description: "Path to the Dockerfile for building the image (relative to the repository)"
+    required: false
+    default: ""
+  custom_image_enabled:
+    description: "Enables the use of Custom Image (true/false)"
+    required: false
+    default: "false"
+  custom_image_image:
+    description: "Full image address. If left empty, it is generated using organization, image_name, and tag"
+    required: false
+    default: ""
+  custom_image_image_tag:
+    description: "Image tag (used if custom_image_image is empty)"
+    required: false
+    default: "latest"
+  custom_image_organization:
+    description: "Organization to build the image (used if custom_image_image is empty)"
+    required: false
+    default: ""
+  custom_image_image_name:
+    description: "Image name (used if custom_image_image is empty)"
+    required: false
+    default: ""
+  custom_image_command:
+    description: "Command to start the container image"
+    required: false
+    default: ""
+  custom_image_args:
+    description: "Command-line parameters to start the image"
+    required: false
+    default: ""
+  custom_image_working_dir:
+    description: "Container working directory"
+    required: false
+    default: ""
+  custom_image_uid:
+    description: "User ID for the container"
+    required: false
+    default: ""
+  custom_image_gid:
+    description: "User group ID for the container"
+    required: false
+    default: ""
+
+  xrole:
+    description: "Huawei Cloud Agency name with permissions (for VPC, SWR, etc.)"
+    required: false
+    default: ""
+
+  # Triggers
+  trigger_enabled:
+    description: "Enables the creation of triggers for the function (true/false)"
+    required: false
+    default: "false"
+  trigger_configs:
+    description: >
+      Trigger configuration in JSON array format.
+      Each object must include at least the `trigger_type_code` parameter and can contain
+      other parameters that will be added with the prefix '--event_data.'.
+    required: false
+    default: "[]"
+
+
+runs:
+  using: "composite"
+  steps:
+    - name: Authenticate
+      uses: huaweicloud/auth-action@v1.1.0
+      with:
+        access_key_id: ${{ inputs.access_key_id }}
+        secret_access_key: ${{ inputs.secret_access_key }}
+        region: ${{ inputs.region }}
+
+    - name: Set up KooCLI
+      uses: huaweicloud/huaweicloud-cli-action@v1.0.0
+
+    - name: Set FunctionGraph Project ID
+      shell: bash
+      id: set_project_id
+      run: |
+        export PROJECT_ID=$(hcloud IAM KeystoneListProjects | jq -r '.projects[] | select(.name == "${{ inputs.region }}")  .id')
+        echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
+
+    - name: Build VPC Arguments
+      if: ${{ inputs.func_vpc_vpc_id != '' }}
+      shell: bash
+      run: |
+        VPC_ARGS=""
+        # If VPC configuration is detected (e.g., if VPC ID is defined)
+        if [ -n "${{ inputs.func_vpc_vpc_id }}" ]; then
+          if [ -z "${{ inputs.xrole }}" ]; then
+            echo "Error: xrole is required when configuring VPC."
+            exit 1
+          fi
+
+          [ -n "${{ inputs.func_vpc_domain_id }}" ] && VPC_ARGS+=" --func_vpc.domain_id=${{ inputs.func_vpc_domain_id }}"
+          [ -n "${{ inputs.func_vpc_namespace }}" ] && VPC_ARGS+=" --func_vpc.namespace=${{ inputs.func_vpc_namespace }}"
+          [ -n "${{ inputs.func_vpc_vpc_name }}" ] && VPC_ARGS+=" --func_vpc.vpc_name=${{ inputs.func_vpc_vpc_name }}"
+          [ -n "${{ inputs.func_vpc_vpc_id }}" ] && VPC_ARGS+=" --func_vpc.vpc_id=${{ inputs.func_vpc_vpc_id }}"
+          [ -n "${{ inputs.func_vpc_subnet_name }}" ] && VPC_ARGS+=" --func_vpc.subnet_name=${{ inputs.func_vpc_subnet_name }}"
+          [ -n "${{ inputs.func_vpc_subnet_id }}" ] && VPC_ARGS+=" --func_vpc.subnet_id=${{ inputs.func_vpc_subnet_id }}"
+          [ -n "${{ inputs.func_vpc_cidr }}" ] && VPC_ARGS+=" --func_vpc.cidr=${{ inputs.func_vpc_cidr }}"
+          [ -n "${{ inputs.func_vpc_gateway }}" ] && VPC_ARGS+=" --func_vpc.gateway=${{ inputs.func_vpc_gateway }}"
+          
+          # Process security groups (assuming they come as a comma-separated string)
+          if [ -n "${{ inputs.func_vpc_security_groups }}" ]; then
+            IFS=',' read -r -a sg_array <<< "${{ inputs.func_vpc_security_groups }}"
+            index=1
+            for sg in "${sg_array[@]}"; do
+              VPC_ARGS+=" --func_vpc.security_groups.$index=$sg"
+              index=$((index + 1))
+            done
+          fi
+        fi
+        echo "VPC_ARGS=${VPC_ARGS}" >> $GITHUB_ENV
+
+    - name: Build Code Arguments
+      shell: bash
+      run: |
+        CODE_ARGS=""
+        UPDATE_CODE_ARGS=""
+        if [ -n "${{ inputs.code_path }}" ] && [ "${{ inputs.code_type }}" == "zip" ]; then
+          echo "Zipping code folder: ${{ inputs.code_path }}"
+          cd ${{ inputs.code_path }}
+          zip -r function_code.zip .
+          CODE_BASE64=$(base64 -w 0 function_code.zip)
+          # For CreateFunction, send it with the func_code.file and code_filename parameters
+          CODE_ARGS+=" --code_filename=function_code.zip"
+          CODE_ARGS+=" --func_code.file=${CODE_BASE64}"
+          # For UpdateFunctionCode, use the same parameters
+          UPDATE_CODE_ARGS+=" --code_filename=function_code.zip"
+          UPDATE_CODE_ARGS+=" --func_code.file=${CODE_BASE64}"
+        fi
+        if [ -n "${{ inputs.code_link }}" ]; then
+          # For CreateFunction, use the func_code.link parameter
+          CODE_ARGS+=" --func_code.link=\"${{ inputs.code_link }}\""
+          # For UpdateFunctionCode, use code_url instead of func_code.link
+          UPDATE_CODE_ARGS+=" --code_url=${{ inputs.code_link }}"
+        fi
+        echo "CODE_ARGS=${CODE_ARGS}"
+        echo "UPDATE_CODE_ARGS=${UPDATE_CODE_ARGS}"
+        echo "CODE_ARGS=${CODE_ARGS}" >> $GITHUB_ENV
+        echo "UPDATE_CODE_ARGS=${UPDATE_CODE_ARGS}" >> $GITHUB_ENV
+
+    - name: Prepare Environment Variables for FunctionGraph
+      id: prepare_env_vars
+      shell: bash
+      run: |
+        USER_DATA_JSON="{"
+        ENCRYPTED_DATA_JSON="{"
+        first_user=true
+        first_encrypted=true
+        for var in $(compgen -e); do
+          if [[ "$var" == FGE_* ]]; then
+            value="${!var}"
+            key="${var#FGE_}"
+            if [ -n "$value" ]; then
+              if [ "$first_encrypted" = true ]; then
+                first_encrypted=false
+              else
+                ENCRYPTED_DATA_JSON+=","
+              fi
+              ENCRYPTED_DATA_JSON+="\"$key\":\"$value\""
+            fi
+          elif [[ "$var" == FG_* ]]; then
+            value="${!var}"
+            key="${var#FG_}"
+            if [ -n "$value" ]; then
+              if [ "$first_user" = true ]; then
+                first_user=false
+              else
+                USER_DATA_JSON+=","
+              fi
+              USER_DATA_JSON+="\"$key\":\"$value\""
+            fi
+          fi
+        done
+        USER_DATA_JSON+="}"
+        ENCRYPTED_DATA_JSON+="}"
+        echo "USER_DATA_JSON: $USER_DATA_JSON"
+        echo "ENCRYPTED_DATA_JSON: $ENCRYPTED_DATA_JSON"
+        echo "USER_DATA=$USER_DATA_JSON" >> $GITHUB_ENV
+        echo "ENCRYPTED_ENV_VARS=$ENCRYPTED_DATA_JSON" >> $GITHUB_ENV
+
+    - name: Build User Data Arguments
+      shell: bash
+      run: |
+        USER_DATA_ARGS=""
+        if [ -n "$USER_DATA" ] && [ "$USER_DATA" != "{}" ]; then
+          ESCAPED_USER_DATA=$(echo "$USER_DATA" | sed 's/"/\\"/g')
+          USER_DATA_ARGS+=" --user_data=\"$ESCAPED_USER_DATA\""
+        fi
+        if [ -n "$ENCRYPTED_ENV_VARS" ] && [ "$ENCRYPTED_ENV_VARS" != "{}" ]; then
+          ESCAPED_ENCRYPTED_ENV_VARS=$(echo "$ENCRYPTED_ENV_VARS" | sed 's/"/\\"/g')
+          USER_DATA_ARGS+=" --encrypted_user_data=\"$ESCAPED_ENCRYPTED_ENV_VARS\""
+        fi
+        echo "USER_DATA_ARGS=$USER_DATA_ARGS" >> $GITHUB_ENV
+
+    
+    - name: Log in to Docker Repository
+      if: ${{ inputs.code_type == 'Custom-Image-Swr' }}
+      shell: bash
+      run: |
+        LOGIN_KEY=$(printf "%s" "${{ inputs.access_key_id }}" | openssl dgst -binary -sha256 -hmac "${{ inputs.secret_access_key }}" | od -An -vtx1 | sed 's/[ \n]//g' | sed 'N;s/\n//')
+        
+        if [ -z "$LOGIN_KEY" ]; then
+          echo "Error: Failed to generate login key."
+          exit 1
+        fi
+        
+        REPO_URL="swr.${{ inputs.region }}.myhuaweicloud.com"
+        REGIONAL_PROJECT_NAME="${{ inputs.region }}"
+        
+        docker login -u "$REGIONAL_PROJECT_NAME@${{ inputs.access_key_id }}" -p "$LOGIN_KEY" "$REPO_URL"
+        
+        if [ $? -eq 0 ]; then
+          echo "Successfully logged into Docker Repository: $REPO_URL"
+        else
+          echo "Error: Failed to log in to Docker Repository."
+          exit 1
+        fi
+
+    - name: Build and Push Custom Image
+      if: ${{ inputs.code_type == 'Custom-Image-Swr' && inputs.dockerfile_path != '' && inputs.custom_image_image_name != '' }}
+      shell: bash
+      run: |
+        REPO_URL="swr.${{ inputs.region }}.myhuaweicloud.com"
+        IMAGE_FULL_NAME="$REPO_URL/${{ inputs.custom_image_organization }}/${{ inputs.custom_image_image_name }}:${{ inputs.custom_image_image_tag }}"
+        echo "Building Docker image: $IMAGE_FULL_NAME using Dockerfile at ${{ inputs.dockerfile_path }}"
+        docker build -f "${{ inputs.dockerfile_path }}" -t "$IMAGE_FULL_NAME" .
+        docker push "$IMAGE_FULL_NAME"
+
+    - name: Build Custom Image Arguments
+      if: ${{ inputs.code_type == 'Custom-Image-Swr' && inputs.runtime == 'Custom Image' }}
+      shell: bash
+      run: |
+        CUSTOM_IMAGE_ARGS=""
+        [ -n "${{ inputs.custom_image_enabled }}" ] && CUSTOM_IMAGE_ARGS+=" --custom_image.enabled=${{ inputs.custom_image_enabled }}"
+        
+        if [ -n "${{ inputs.custom_image_image }}" ]; then
+          CUSTOM_IMAGE_ARGS+=" --custom_image.image='${{ inputs.custom_image_image }}'"
+        elif [ -n "${{ inputs.custom_image_organization }}" ] && [ -n "${{ inputs.custom_image_image_name }}" ]; then
+          CUSTOM_IMAGE_ARGS+=" --custom_image.image='swr.${{ inputs.region }}.myhuaweicloud.com/${{ inputs.custom_image_organization }}/${{ inputs.custom_image_image_name }}:${{ inputs.custom_image_image_tag }}'"
+        fi
+
+        [ -n "${{ inputs.custom_image_command }}" ] && CUSTOM_IMAGE_ARGS+=" --custom_image.command=${{ inputs.custom_image_command }}"
+        [ -n "${{ inputs.custom_image_args }}" ] && CUSTOM_IMAGE_ARGS+=" --custom_image.args=${{ inputs.custom_image_args }}"
+        [ -n "${{ inputs.custom_image_working_dir }}" ] && CUSTOM_IMAGE_ARGS+=" --custom_image.working_dir=${{ inputs.custom_image_working_dir }}"
+        [ -n "${{ inputs.custom_image_uid }}" ] && CUSTOM_IMAGE_ARGS+=" --custom_image.uid=${{ inputs.custom_image_uid }}"
+        [ -n "${{ inputs.custom_image_gid }}" ] && CUSTOM_IMAGE_ARGS+=" --custom_image.gid=${{ inputs.custom_image_gid }}"
+        
+        echo "CUSTOM_IMAGE_ARGS=${CUSTOM_IMAGE_ARGS}" >> $GITHUB_ENV
+
+    - name: Check if function exists
+      shell: bash
+      run: |
+        function_list_output=$(hcloud FunctionGraph ListFunctions --cli-region=${{ inputs.region }} --project_id=$PROJECT_ID 2>&1)
+        function_exists=$(echo "$function_list_output" | jq -r --arg FUNC_NAME "${{ inputs.func_name }}" '.functions[] | select(.func_name == $FUNC_NAME) | .func_name')
+        
+        if [ "$function_exists" == "${{ inputs.func_name }}" ]; then
+          echo "Function already exists."
+          echo "FUNCTION_EXISTS=true" >> $GITHUB_ENV
+        else
+          echo "Function does not exist."
+          echo "FUNCTION_EXISTS=false" >> $GITHUB_ENV
+        fi
+
+    - name: Update Function Code
+      if: ${{ env.FUNCTION_EXISTS == 'true' }} && ${{ inputs.code_type != 'Custom-Image-Swr' }}
+      shell: bash
+      run: |
+        # Construir el function URN según el formato requerido:
+        FUNCTION_URN="urn:fss:${{ inputs.region }}:$PROJECT_ID:function:${{ inputs.package }}:${{ inputs.func_name }}:latest"
+        CMD="hcloud FunctionGraph UpdateFunctionCode \
+          --cli-region=${{ inputs.region }} \
+          --code_type=${{ inputs.code_type }} \
+          $UPDATE_CODE_ARGS \
+          --function_urn=${FUNCTION_URN}"
+        echo "Updating function code with command:"
+        echo "$CMD"
+        eval $CMD
+
+    - name: Update Function Config
+      if: ${{ env.FUNCTION_EXISTS == 'true' }}
+      shell: bash
+      run: |
+        FUNCTION_URN="urn:fss:${{ inputs.region }}:$PROJECT_ID:function:${{ inputs.package }}:${{ inputs.func_name }}:latest"
+        CMD="hcloud FunctionGraph UpdateFunctionConfig \
+          --cli-region=${{ inputs.region }} \
+          --project_id=$PROJECT_ID \
+          --handler=${{ inputs.handler }} \
+          --runtime='${{ inputs.runtime }}' \
+          --timeout=${{ inputs.timeout }} \
+          --memory_size=${{ inputs.memory_size }} \
+          --xrole=${{ inputs.xrole }} \
+          --function_urn=${FUNCTION_URN} \
+          --func_name=${{ inputs.func_name }} \
+          $VPC_ARGS $CUSTOM_IMAGE_ARGS $USER_DATA_ARGS"
+        echo "Updating function configuration with command:"
+        echo "$CMD"
+        eval $CMD
+
+    - name: Create Function in FunctionGraph
+      if: ${{ env.FUNCTION_EXISTS != 'true' }}
+      shell: bash
+      run: |
+        CMD="hcloud FunctionGraph CreateFunction \
+          --cli-region=${{ inputs.region }} \
+          --Content-Type=application/json \
+          --handler=${{ inputs.handler }} \
+          --code_type=${{ inputs.code_type }} \
+          --package=${{ inputs.package }} \
+          --runtime='${{ inputs.runtime }}' \
+          --timeout=${{ inputs.timeout }} \
+          --func_name=${{ inputs.func_name }} \
+          --memory_size=${{ inputs.memory_size }} \
+          --xrole=${{ inputs.xrole }} \
+          $CODE_ARGS $VPC_ARGS $CUSTOM_IMAGE_ARGS $USER_DATA_ARGS"
+        echo "Creating new function with command:"
+        echo "$CMD"
+        eval $CMD
+        
+    - name: Create or Update Function Triggers (with debugging)
+      if: ${{ inputs.trigger_enabled == 'true' }}
+      shell: bash
+      run: |
+        FUNCTION_URN="urn:fss:${{ inputs.region }}:$PROJECT_ID:function:${{ inputs.package }}:${{ inputs.func_name }}:latest"
+        echo "Constructed FUNCTION_URN: $FUNCTION_URN"
+
+        # Convert the input trigger_configs (JSON array) into triggers
+        TRIGGERS='${{ inputs.trigger_configs }}'
+        echo "TRIGGERS variable: $TRIGGERS"
+        TRIGGER_COUNT=$(echo "$TRIGGERS" | jq '. | length')
+        echo "Found $TRIGGER_COUNT trigger(s) in input."
+
+        # List the current triggers for the function
+        CURRENT_TRIGGERS=$(hcloud FunctionGraph ListFunctionTriggers --cli-region=${{ inputs.region }} --function_urn=${FUNCTION_URN} --project_id=$PROJECT_ID)
+        echo "Current triggers raw output:"
+        echo "$CURRENT_TRIGGERS" | jq .
+        echo "Extracted trigger names from CURRENT_TRIGGERS:"
+        echo "$CURRENT_TRIGGERS" | jq -r '.[].event_data.name'
+
+        for (( i=0; i<$TRIGGER_COUNT; i++ ))
+        do
+          echo "Processing trigger config index: $i"
+          
+          # Extract trigger_type_code and trigger name from input
+          TRIGGER_TYPE_CODE=$(echo "$TRIGGERS" | jq -r ".[$i].trigger_type_code")
+          TRIGGER_NAME=$(echo "$TRIGGERS" | jq -r ".[$i].name")
+          echo "Trigger type code (input): $TRIGGER_TYPE_CODE"
+          echo "Trigger name (input): $TRIGGER_NAME"
+          
+          # Search in the list of existing triggers for one with the same name (inside event_data)
+          EXISTING_TRIGGER_ID=$(echo "$CURRENT_TRIGGERS" | jq -r --arg NAME "$TRIGGER_NAME" '.[] | select(.event_data.name == $NAME) | .trigger_id')
+          echo "Existing trigger ID for trigger named '$TRIGGER_NAME': $EXISTING_TRIGGER_ID"
+          
+          if [ -n "$EXISTING_TRIGGER_ID" ] && [ "$EXISTING_TRIGGER_ID" != "null" ]; then
+            echo "Deleting existing trigger with ID: $EXISTING_TRIGGER_ID"
+            DELETE_CMD="hcloud FunctionGraph DeleteFunctionTrigger --cli-region=${{ inputs.region }} --project_id=$PROJECT_ID --function_urn=${FUNCTION_URN} --trigger_type_code=${TRIGGER_TYPE_CODE} --trigger_id=${EXISTING_TRIGGER_ID}"
+            echo "Delete command: $DELETE_CMD"
+            set -f  # Disable globbing
+            eval "$DELETE_CMD"
+            set +f
+          else
+            echo "No existing trigger found with name: $TRIGGER_NAME"
+          fi
+          
+          # Convert the rest of the trigger configuration into arguments.
+          # Omit trigger_type_code and trigger_status (already extracted)
+          EXTRA_ARGS=$(echo "$TRIGGERS" | jq -r ".[${i}] | del(.trigger_type_code, .trigger_status) | to_entries[] | \"--event_data.\" + .key + \"=\" + (.value|@sh)" | tr '\n' ' ')
+          echo "EXTRA_ARGS for trigger index $i: $EXTRA_ARGS"
+          
+          # Construct the command to create the new trigger
+          CMD="hcloud FunctionGraph CreateFunctionTrigger --cli-region=${{ inputs.region }} --function_urn=${FUNCTION_URN} --project_id=$PROJECT_ID --trigger_type_code=${TRIGGER_TYPE_CODE} $EXTRA_ARGS"
+          
+          # Extract trigger_status if it exists
+          TRIGGER_STATUS=$(echo "$TRIGGERS" | jq -r ".[${i}].trigger_status")
+          if [ "$TRIGGER_STATUS" != "null" ] && [ -n "$TRIGGER_STATUS" ]; then
+            CMD+=" --trigger_status=${TRIGGER_STATUS}"
+          fi
+          
+          echo "Final command for new trigger $((i+1)):"
+          echo "$CMD"
+          
+          set -f
+          eval "$CMD"
+          set +f
+        done

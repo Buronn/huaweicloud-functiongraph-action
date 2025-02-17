@@ -1,0 +1,28 @@
+FROM python:3.7-slim
+
+ENV HOME=/home/custom_container
+ENV GROUP_ID=1003
+ENV GROUP_NAME=custom_container
+ENV USER_ID=1003
+ENV USER_NAME=custom_container
+
+RUN mkdir -m 550 ${HOME} && \
+    groupadd -g ${GROUP_ID} ${GROUP_NAME} && \
+    useradd -u ${USER_ID} -g ${GROUP_ID} ${USER_NAME}
+
+WORKDIR ${HOME}
+
+COPY --chown=${USER_ID}:${GROUP_ID} ./example-app/requirements.txt ${HOME}/requirements.txt
+COPY --chown=${USER_ID}:${GROUP_ID} ./example-app/ ${HOME}/
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+RUN chown -R ${USER_ID}:${GROUP_ID} ${HOME} && \
+    find ${HOME} -type d -exec chmod 500 {} \; && \
+    find ${HOME} -type f -exec chmod 500 {} \;
+
+USER ${USER_NAME}
+
+EXPOSE 8000
+
+ENTRYPOINT python3 ${HOME}/index.py

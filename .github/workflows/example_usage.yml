@@ -1,0 +1,63 @@
+name: Deploy FunctionGraph
+
+on:
+  push:
+    branches: [ none ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FGE_API_KEY: ${{ secrets.FGE_API_KEY }}
+      FG_OTHER_VAR: "example-value"
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Deploy Function (ZIP Code, VPC, Python)
+        uses: Buronn/huaweicloud-functiongraph-action@v0.1.0
+        with:
+          access_key_id: ${{ secrets.HW_ACCESS_KEY }}
+          secret_access_key: ${{ secrets.HW_SECRET_KEY }}
+          region: ${{ vars.HW_REGION }}
+          func_name: "zip-function-vpc"
+          package: "default"
+          runtime: "Python3.10"
+          timeout: 30
+          handler: "index.handler"
+          memory_size: 256
+          code_path: "src/my-python-function"
+          code_type: "zip"
+          func_vpc_vpc_id: ${{ vars.HW_VPC_ID }}
+          func_vpc_subnet_id: ${{ vars.HW_SUBNET_ID }}
+          xrole: ${{ vars.HW_XROLE }}
+
+      - name: Deploy Function (Custom Docker Image, VPC, Python) with Cron Trigger
+        uses: Buronn/huaweicloud-functiongraph-action@v0.1.0
+        with:
+          access_key_id: ${{ secrets.HW_ACCESS_KEY }}
+          secret_access_key: ${{ secrets.HW_SECRET_KEY }}
+          region: ${{ vars.HW_REGION }}
+          func_name: "custom-image-function-vpc"
+          package: "default"
+          runtime: "Custom Image"
+          timeout: 30
+          handler: "-"
+          memory_size: 256
+          xrole: ${{ vars.HW_XROLE }}
+
+          code_path: "src/custom-image-function"  
+          code_type: "Custom-Image-Swr"
+          
+          dockerfile_path: "Dockerfile"
+          custom_image_enabled: "true"
+          custom_image_image_name: "custom-function-image"
+          custom_image_image_tag: "latest"
+          custom_image_organization: "my-dev-team"
+
+          func_vpc_vpc_id: ${{ vars.HW_VPC_ID }}
+          func_vpc_subnet_id: ${{ vars.HW_SUBNET_ID }}
+
+          trigger_enabled: "true"
+          trigger_configs: '[{"trigger_type_code": "TIMER", "schedule_type": "Cron", "schedule": "0 */5 * * * *", "name": "EveryFiveMinutes"}]'
