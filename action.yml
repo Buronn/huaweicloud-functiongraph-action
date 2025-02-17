@@ -1,6 +1,8 @@
 name: "Huawei FunctionGraph Deploy Action"
 description: "Action to deploy a function in Huawei Cloud's FunctionGraph using mandatory parameters."
-
+branding:
+  icon: 'arrow-up'
+  color: 'red'
 inputs:
   access_key_id:
     description: "Huawei Cloud Access Key ID"
