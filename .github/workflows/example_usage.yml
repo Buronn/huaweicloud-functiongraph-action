@@ -27,7 +27,7 @@ jobs:
           timeout: 30
           handler: "index.handler"
           memory_size: 256
-          code_path: "src/my-python-function"
+          code_path: "example-app"
           code_type: "zip"
           func_vpc_vpc_id: ${{ vars.HW_VPC_ID }}
           func_vpc_subnet_id: ${{ vars.HW_SUBNET_ID }}
@@ -47,10 +47,10 @@ jobs:
           memory_size: 256
           xrole: ${{ vars.HW_XROLE }}
 
-          code_path: "src/custom-image-function"  
+          code_path: "example-app"  
           code_type: "Custom-Image-Swr"
           
-          dockerfile_path: "Dockerfile"
+          dockerfile_path: "Dockerfile.example"
           custom_image_enabled: "true"
           custom_image_image_name: "custom-function-image"
           custom_image_image_tag: "latest"
